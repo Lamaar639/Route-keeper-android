@@ -1,0 +1,6 @@
+{
+  "name": "RouteKeeper",
+  "description": "Delivery route planner and stop tracker with delivery note import, OpenStreetMap routing, and stop tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E453B" />
+      <stop offset="100%" stop-color="#122A24" />
+    </linearGradient>
+    <linearGradient id="accentMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D5EA83" />
+      <stop offset="100%" stop-color="#A3E635" />
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed background for maskable safe-zone -->
+  <rect width="512" height="512" fill="url(#bgMask)" />
+
+  <!-- Scaled content centered within 80% safe zone -->
+  <g transform="translate(51.2, 51.2) scale(0.8)">
+    <path d="M 256 96 C 185.3 96 128 153.3 128 224 C 128 316 238.4 402.7 248.5 410.5 C 253 414 259 414 263.5 410.5 C 273.6 402.7 384 316 384 224 C 384 153.3 326.7 96 256 96 Z" fill="url(#accentMask)" />
+    <circle cx="256" cy="224" r="54" fill="#1E453B" />
+    <polygon points="256,192 284,248 256,236 228,248" fill="#D5EA83" />
+  </g>
+</svg>

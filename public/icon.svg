@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E453B" />
+      <stop offset="100%" stop-color="#122A24" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D5EA83" />
+      <stop offset="100%" stop-color="#A3E635" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+
+  <!-- Inner subtle border -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#D5EA83" stroke-opacity="0.15" stroke-width="4" />
+
+  <!-- Delivery Pin & Compass Icon -->
+  <g filter="url(#shadow)">
+    <!-- Pin Body -->
+    <path d="M 256 96 C 185.3 96 128 153.3 128 224 C 128 316 238.4 402.7 248.5 410.5 C 253 414 259 414 263.5 410.5 C 273.6 402.7 384 316 384 224 C 384 153.3 326.7 96 256 96 Z" fill="url(#accent)" />
+    <!-- Pin Center Core -->
+    <circle cx="256" cy="224" r="54" fill="#1E453B" />
+    <!-- Center Navigation Arrow -->
+    <polygon points="256,192 284,248 256,236 228,248" fill="#D5EA83" />
+    <!-- Route connecting dots -->
+    <circle cx="156" cy="380" r="14" fill="#D5EA83" opacity="0.6" />
+    <circle cx="196" cy="398" r="10" fill="#D5EA83" opacity="0.4" />
+    <circle cx="356" cy="380" r="14" fill="#D5EA83" opacity="0.6" />
+    <circle cx="316" cy="398" r="10" fill="#D5EA83" opacity="0.4" />
+  </g>
+</svg>
