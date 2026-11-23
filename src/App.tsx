@@ -36,13 +36,19 @@ import {
   Gauge,
   Milestone,
   Video,
+  Sliders,
 } from 'lucide-react';
 import LeafletMap from './components/LeafletMap';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import OfflineMapModal from './components/OfflineMapModal';
 import OfflineMapTab from './components/OfflineMapTab';
-import { getOfflineStorageStats } from './services/offlineTileManager';
+import VideoExportModal from './components/VideoExportModal';
+import {
+  getOfflineStorageStats,
+  subscribeToDownloadJob,
+  type ActiveDownloadJob,
+} from './services/offlineTileManager';
 import { useDeviceLayout } from './hooks/useDeviceLayout';
 import { MAP_LINE_COLORS, MAP_MARKER_COLORS } from './constants/mapStyles';
 import { useRouteData } from './context/RouteDataContext';
@@ -239,6 +245,19 @@ export default function App() {
     };
   }, [isOfflineModalOpen]);
 
+  // Active background download job state (persisted across screens)
+  const [downloadJob, setDownloadJob] = useState<ActiveDownloadJob | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToDownloadJob((job) => {
+      setDownloadJob(job);
+      if (job?.status === 'completed') {
+        getOfflineStorageStats().then((stats) => setOfflinePackCount(stats.packs.length)).catch(() => {});
+      }
+    });
+    return unsub;
+  }, []);
+
   // Import state
   const [parsedStops, setParsedStops] = useState<DeliveryStop[]>([]);
   const [sourceName, setSourceName] = useState('');
@@ -273,11 +292,14 @@ export default function App() {
   const [inlineEditingStopId, setInlineEditingStopId] = useState<string | null>(null);
   const [inlineAddressText, setInlineAddressText] = useState('');
 
-  // Video Animation Export state
-  const [isExportingVideo, setIsExportingVideo] = useState(false);
-  const [videoExportProgress, setVideoExportProgress] = useState(0);
-  const [videoExportStage, setVideoExportStage] = useState('');
-  const [videoExportError, setVideoExportError] = useState<string | null>(null);
+  // Video Animation Export Modal state
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+  const [videoExportTargetRoute, setVideoExportTargetRoute] = useState<RouteDraft | SavedRoute | null>(null);
+
+  const openVideoExportModal = (targetRoute: RouteDraft | SavedRoute) => {
+    setVideoExportTargetRoute(targetRoute);
+    setIsVideoModalOpen(true);
+  };
 
   const activeStops = draft?.stops ?? [];
   const locatedHistory = useMemo(
@@ -338,12 +360,51 @@ export default function App() {
     } else if (screen === 'pre-route-review') {
       setScreen('import');
     } else if (screen === 'route') {
-      setScreen('pre-route-review');
+      // Return directly to Home/Dashboard without re-triggering options
+      setScreen('home');
+      setMainTab('home');
     } else {
       setScreen('home');
       setMainTab('home');
     }
   };
+
+  // Push state to browser history when screen changes
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.history?.state?.screen !== screen) {
+        window.history.pushState({ screen }, '');
+      }
+    } catch {
+      // ignore
+    }
+  }, [screen]);
+
+  // Handle hardware / browser back gestures cleanly on mobile
+  useEffect(() => {
+    const onPopState = (e: PopStateEvent) => {
+      if (isVideoModalOpen) {
+        setIsVideoModalOpen(false);
+        return;
+      }
+      if (isSummaryModalOpen) {
+        setIsSummaryModalOpen(false);
+        return;
+      }
+      if (isOfflineModalOpen) {
+        setIsOfflineModalOpen(false);
+        return;
+      }
+      if (e.state?.screen && e.state.screen !== screen) {
+        setScreen(e.state.screen);
+      } else {
+        goBack();
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [screen, isVideoModalOpen, isSummaryModalOpen, isOfflineModalOpen, previousDetailScreen]);
 
   const openNewRoute = () => {
     setParsedStops([]);
@@ -1031,10 +1092,10 @@ export default function App() {
   const summaryDuration = currentSummaryRoute?.durationSeconds;
 
   return (
-    <div className="min-h-screen bg-[#F3F5ED] flex flex-col items-center text-[#1A2E27]">
+    <div className="min-h-[100dvh] w-full bg-[#F3F5ED] flex flex-col items-center text-[#1A2E27] overflow-x-hidden">
       {/* Toast Notification Banner */}
       {toastMessage && (
-        <div className="fixed top-4 z-[9999] bg-[#1E453B] text-[#D5EA83] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg flex items-center gap-2 border border-[#D5EA83]/40 animate-in fade-in slide-in-from-top-4 duration-200">
+        <div className="fixed top-[max(env(safe-area-inset-top,0px),16px)] z-[9999] bg-[#1E453B] text-[#D5EA83] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg flex items-center gap-2 border border-[#D5EA83]/40 animate-in fade-in slide-in-from-top-4 duration-200">
           <Check className="w-4 h-4 stroke-[3]" />
           <span>{toastMessage}</span>
         </div>
@@ -1043,12 +1104,12 @@ export default function App() {
       <main
         className={
           device.isDashmountLandscape && (screen === 'route' || screen === 'history-route')
-            ? 'w-full h-screen p-2.5 flex flex-col gap-2 overflow-hidden'
+            ? 'w-full h-[100dvh] p-2.5 pt-[max(env(safe-area-inset-top,0px),10px)] pb-[max(env(safe-area-inset-bottom,0px),10px)] flex flex-col gap-2 overflow-hidden'
             : device.isDesktop
             ? (screen === 'route' || screen === 'history-route'
-                ? 'w-full max-w-7xl px-6 py-5 pb-12 flex flex-col gap-4'
-                : 'w-full max-w-5xl px-6 py-6 pb-12 flex flex-col gap-5')
-            : 'w-full max-w-xl px-4 py-5 pb-24 md:pb-12 flex flex-col gap-4'
+                ? 'w-full max-w-7xl px-6 pt-[max(env(safe-area-inset-top,0px),20px)] pb-12 flex flex-col gap-4'
+                : 'w-full max-w-5xl px-6 pt-[max(env(safe-area-inset-top,0px),24px)] pb-12 flex flex-col gap-5')
+            : 'w-full max-w-xl px-[max(env(safe-area-inset-left,0px),16px)] pr-[max(env(safe-area-inset-right,0px),16px)] pt-[max(env(safe-area-inset-top,0px),16px)] pb-[calc(88px+max(env(safe-area-inset-bottom,0px),14px))] md:pb-12 flex flex-col gap-4'
         }
       >
         {/* Storage error warning */}
@@ -2034,6 +2095,15 @@ export default function App() {
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
+                    onClick={() => setScreen('pre-route-review')}
+                    className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer transition flex items-center gap-1"
+                    title="Edit Route Optimization Options"
+                  >
+                    <Sliders className="w-3 h-3" />
+                    <span>Options</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setIsAnimatingRoute((prev) => !prev)}
                     className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
                       isAnimatingRoute ? 'bg-[#D5EA83] text-[#1E453B]' : 'bg-white/10 text-white hover:bg-white/20'
@@ -2044,18 +2114,17 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => draft && handleExportRouteVideo(draft)}
-                    disabled={isExportingVideo}
-                    className="px-2.5 py-1 rounded-lg bg-[#D5EA83] text-[#1E453B] text-xs font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                    title="Export 25-second cinematic route video"
+                    onClick={() => draft && openVideoExportModal(draft)}
+                    className="px-2.5 py-1 rounded-lg bg-[#D5EA83] text-[#1E453B] text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs hover:bg-[#c6de6a] transition"
+                    title="Export customized route animation video"
                   >
                     <Video className="w-3 h-3" />
-                    <span>25s MP4</span>
+                    <span>Video</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsSummaryModalOpen(true)}
-                    className="px-2.5 py-1 rounded-lg bg-white/15 text-white hover:bg-white/25 text-xs font-bold cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-white/15 text-white hover:bg-white/25 text-xs font-bold cursor-pointer transition"
                     title="Open Route Summary Stats"
                   >
                     <BarChart3 className="w-3 h-3 inline mr-1" />
@@ -2218,9 +2287,30 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Summary Modal Button Trigger */}
-              <div className="flex items-center gap-2">
+              {/* Header Actions: Options, Video, Summary */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setScreen('pre-route-review')}
+                  className="py-1.5 px-2.5 rounded-xl border border-[#DDE3D7] bg-white text-[#1E453B] hover:bg-[#FAFBF7] text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                  title="Route Optimization Settings & Dwell Time"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Options</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => draft && openVideoExportModal(draft)}
+                  className="py-1.5 px-2.5 rounded-xl border border-[#DDE3D7] bg-white text-[#1E453B] hover:bg-[#FAFBF7] text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                  title="Export custom animated video of this route"
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Video</span>
+                </button>
+
                 <PWAInstallButton />
+
                 <button
                   type="button"
                   onClick={() => setIsSummaryModalOpen(true)}
@@ -2303,13 +2393,12 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => draft && handleExportRouteVideo(draft)}
-                      disabled={isExportingVideo}
-                      className="px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-[#1E453B] hover:bg-[#152F29] text-[#D5EA83] transition cursor-pointer shadow-xs disabled:opacity-50"
-                      title="Export 25-second cinematic MP4 video with overview and vehicle follow camera zoom"
+                      onClick={() => draft && openVideoExportModal(draft)}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-[#1E453B] hover:bg-[#152F29] text-[#D5EA83] transition cursor-pointer shadow-xs"
+                      title="Export custom animated route video with settings"
                     >
                       <Video className="w-3.5 h-3.5" />
-                      <span>Export 25s Video</span>
+                      <span>Export Video</span>
                     </button>
                   </div>
                 )}
@@ -2350,13 +2439,12 @@ export default function App() {
                   ))}
                   <button
                     type="button"
-                    onClick={() => draft && handleExportRouteVideo(draft)}
-                    disabled={isExportingVideo}
+                    onClick={() => draft && openVideoExportModal(draft)}
                     className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#D5EA83] text-[#273626] hover:bg-[#c6de6a] flex items-center gap-1 transition cursor-pointer ml-1"
-                    title="Export video MP4"
+                    title="Export video with settings"
                   >
                     <Download className="w-3 h-3" />
-                    <span>MP4</span>
+                    <span>Video</span>
                   </button>
                   <button
                     type="button"
@@ -2598,6 +2686,74 @@ export default function App() {
               </div>
             )}
 
+            {/* Up Next Stop Quick-Action Card for Mobile Drivers */}
+            {routeViewMode === 'list' && nextPendingStop && !nextPendingStop.delivered && (
+              <div className="bg-gradient-to-br from-[#1E453B] to-[#152F29] text-white rounded-2xl p-4 shadow-md flex flex-col gap-3 border border-[#D5EA83]/30 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black tracking-widest uppercase text-[#D5EA83] flex items-center gap-1.5">
+                    <Navigation className="w-3.5 h-3.5 fill-current" />
+                    <span>UP NEXT · STOP #{nextPendingIndex + 1} OF {activeStops.length}</span>
+                  </span>
+                  {nextPendingStop.timeWindow ? (
+                    <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#312E81] border border-[#818CF8] shadow-2xs">
+                      🕒 {nextPendingStop.timeWindow.label || `${nextPendingStop.timeWindow.startTime}–${nextPendingStop.timeWindow.endTime}`}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-[#D5EA83]/80">
+                      ETA ~{nextPendingStop.estimatedArrival || '09:00'}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-black text-base text-white truncate">
+                      {nextPendingStop.name}
+                    </h3>
+                    <p className="text-xs text-[#E7ECE2] mt-0.5 line-clamp-2 leading-relaxed">
+                      {nextPendingStop.address}
+                    </p>
+                    {nextPendingStop.orderId && (
+                      <span className="text-[10px] text-[#D5EA83] font-semibold mt-1 inline-block">
+                        Order #{nextPendingStop.orderId}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Big Thumb-Friendly Quick Action Buttons */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => triggerNavigation(nextPendingStop)}
+                    className="flex-1 py-3 px-3 rounded-xl bg-[#D5EA83] hover:bg-[#c6de6a] text-[#1E453B] font-black text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+                  >
+                    <Navigation className="w-4 h-4 fill-current" />
+                    <span>Navigate</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleToggleStop(nextPendingStop.id, nextPendingStop.delivered)}
+                    className="flex-1 py-3 px-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white font-black text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+                  >
+                    <Check className="w-4 h-4 stroke-[3]" />
+                    <span>Mark Done</span>
+                  </button>
+
+                  {nextPendingStop.phone && (
+                    <a
+                      href={`tel:${nextPendingStop.phone}`}
+                      className="w-12 h-11 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center shrink-0 transition"
+                      title="Call customer"
+                    >
+                      <Phone className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Stop List View */}
             {routeViewMode === 'list' && (
               <div className="bg-white border border-[#DDE3D7] rounded-2xl divide-y divide-[#F3F5ED] overflow-hidden shadow-xs">
@@ -2713,10 +2869,11 @@ export default function App() {
                               {stop.name}
                             </span>
 
-                            {/* Customer Time Slot badge */}
+                            {/* Customer Booked Time Slot badge - Obvious at a glance */}
                             {stop.timeWindow && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#EEF2FF] text-[#4338CA] border border-[#C7D2FE]">
-                                🕒 {stop.timeWindow.label || `${stop.timeWindow.startTime}–${stop.timeWindow.endTime}`}
+                              <span className="text-xs font-black px-2 py-0.5 rounded-lg bg-[#EEF2FF] text-[#312E81] border border-[#818CF8] flex items-center gap-1 shadow-2xs shrink-0">
+                                <Clock className="w-3.5 h-3.5 text-[#4338CA] stroke-[2.5]" />
+                                <span>{stop.timeWindow.label || `${stop.timeWindow.startTime} – ${stop.timeWindow.endTime}`}</span>
                               </span>
                             )}
 
@@ -3141,6 +3298,54 @@ export default function App() {
                             </button>
                           </div>
 
+                          {/* Customer Requested Time Slot - Highly Visible for Drivers at a Glance */}
+                          {stop.timeWindow ? (
+                            <div className="mt-1.5 p-2.5 rounded-xl bg-gradient-to-r from-[#EEF2FF] to-[#E0E7FF] border-2 border-[#6366F1] shadow-2xs flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="w-7 h-7 rounded-lg bg-[#4338CA] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                                  <Clock className="w-4 h-4 stroke-[2.5]" />
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-[10px] font-black uppercase tracking-wider text-[#4338CA]">
+                                    Customer Booked Slot
+                                  </span>
+                                  <span className="text-sm font-black text-[#1E1B4B] tracking-tight">
+                                    {stop.timeWindow.label || `${stop.timeWindow.startTime} – ${stop.timeWindow.endTime}`}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex flex-col items-end shrink-0">
+                                <span className="text-[10px] font-bold text-[#475569]">Calculated Arrival</span>
+                                <span
+                                  className={`text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs flex items-center gap-1 ${
+                                    stop.windowStatus === 'late'
+                                      ? 'bg-[#FEF2F2] text-[#991B1B] border-[#FCA5A5]'
+                                      : stop.windowStatus === 'on-time'
+                                      ? 'bg-[#ECFDF5] text-[#065F46] border-[#6EE7B7]'
+                                      : 'bg-[#F0FDF4] text-[#166534] border-[#86EFAC]'
+                                  }`}
+                                >
+                                  ETA {stop.estimatedArrival || '09:00'}
+                                  <span>
+                                    {stop.windowStatus === 'late'
+                                      ? '⚠️ Late'
+                                      : stop.windowStatus === 'on-time'
+                                      ? '✓ On-Time'
+                                      : 'Early'}
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-1 px-2.5 py-1.5 rounded-lg bg-[#F8FAF6] border border-[#E2E8F0] flex items-center justify-between text-xs text-[#64748B]">
+                              <span className="flex items-center gap-1 font-semibold text-[#475569]">
+                                <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+                                Standard Day Window (No specific slot booked)
+                              </span>
+                              <span className="font-bold text-[#1E453B]">ETA {stop.estimatedArrival || '09:00'}</span>
+                            </div>
+                          )}
+
                           {/* Inline Address Editor inside Summary */}
                           {inlineEditingStopId === stop.id && (
                             <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 flex flex-col gap-1.5 animate-in fade-in duration-150">
@@ -3184,9 +3389,8 @@ export default function App() {
                 {activeRouteLocated > 1 && (
                   <button
                     type="button"
-                    onClick={() => draft && handleExportRouteVideo(draft)}
-                    disabled={isExportingVideo}
-                    className="w-full py-3 rounded-xl bg-white border border-[#DDE3D7] hover:bg-[#FAFBF7] text-[#1E453B] font-bold text-xs flex items-center justify-center gap-2 shadow-xs cursor-pointer transition disabled:opacity-50"
+                    onClick={() => draft && openVideoExportModal(draft)}
+                    className="w-full py-3 rounded-xl bg-white border border-[#DDE3D7] hover:bg-[#FAFBF7] text-[#1E453B] font-bold text-xs flex items-center justify-center gap-2 shadow-xs cursor-pointer transition"
                   >
                     <Video className="w-4 h-4 text-[#1E453B]" />
                     <span>Export Delivery Route Video (MP4)</span>
@@ -3403,6 +3607,61 @@ export default function App() {
                   <div className="text-[10px] font-semibold text-[#065F46] bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-1 rounded-lg w-fit mt-1 flex items-center gap-1">
                     <span>🛰️</span>
                     <span>Geolocated via {selectedStop.geocodedBy}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Customer Delivery Time Window */}
+              <div className="border-t border-[#F3F5ED] pt-3 flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold tracking-wider text-[#748078] uppercase">
+                  DELIVERY TIME SLOT
+                </span>
+                {selectedStop.timeWindow ? (
+                  <div className="p-3 rounded-xl bg-gradient-to-r from-[#EEF2FF] to-[#E0E7FF] border-2 border-[#6366F1] shadow-2xs flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-lg bg-[#4338CA] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                        <Clock className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-[#4338CA]">
+                          Customer Requested Slot
+                        </span>
+                        <span className="text-sm font-black text-[#1E1B4B]">
+                          {selectedStop.timeWindow.label || `${selectedStop.timeWindow.startTime} – ${selectedStop.timeWindow.endTime}`}
+                        </span>
+                      </div>
+                    </div>
+                    {selectedStop.estimatedArrival && (
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold text-[#475569]">Scheduled ETA</span>
+                        <span
+                          className={`text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs flex items-center gap-1 ${
+                            selectedStop.windowStatus === 'late'
+                              ? 'bg-[#FEF2F2] text-[#991B1B] border-[#FCA5A5]'
+                              : selectedStop.windowStatus === 'on-time'
+                              ? 'bg-[#ECFDF5] text-[#065F46] border-[#6EE7B7]'
+                              : 'bg-[#F0FDF4] text-[#166534] border-[#86EFAC]'
+                          }`}
+                        >
+                          ETA {selectedStop.estimatedArrival}
+                          <span>
+                            {selectedStop.windowStatus === 'late'
+                              ? '⚠️ Late'
+                              : selectedStop.windowStatus === 'on-time'
+                              ? '✓ On-Time'
+                              : 'Early'}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-[#748078] flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+                    <span>Anytime today (No fixed customer time slot)</span>
+                    {selectedStop.estimatedArrival && (
+                      <span className="font-bold text-[#1E453B]">· ETA ~{selectedStop.estimatedArrival}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -3639,13 +3898,12 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleExportRouteVideo(selectedRoute)}
-                    disabled={isExportingVideo}
-                    className="px-2.5 py-1 rounded-lg bg-[#D5EA83] text-[#1E453B] text-xs font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                    title="Export 25-second cinematic route video"
+                    onClick={() => selectedRoute && openVideoExportModal(selectedRoute)}
+                    className="px-2.5 py-1 rounded-lg bg-[#D5EA83] text-[#1E453B] text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs hover:bg-[#c6de6a] transition"
+                    title="Export customized route animation video"
                   >
                     <Video className="w-3 h-3" />
-                    <span>25s MP4</span>
+                    <span>Video</span>
                   </button>
                   <button
                     type="button"
@@ -3818,13 +4076,12 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() => handleExportRouteVideo(selectedRoute)}
-                    disabled={isExportingVideo}
-                    className="py-2 px-3.5 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-[#1E453B] hover:bg-[#152F29] text-[#D5EA83] transition cursor-pointer shadow-xs disabled:opacity-50"
-                    title="Export high-definition MP4 video of this route animation"
+                    onClick={() => selectedRoute && openVideoExportModal(selectedRoute)}
+                    className="py-2 px-3.5 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-[#1E453B] hover:bg-[#152F29] text-[#D5EA83] transition cursor-pointer shadow-xs"
+                    title="Export customized video of this route animation"
                   >
                     <Video className="w-3.5 h-3.5" />
-                    <span>Export MP4</span>
+                    <span>Export Video</span>
                   </button>
                 </div>
               )}
@@ -3864,13 +4121,12 @@ export default function App() {
                   ))}
                   <button
                     type="button"
-                    onClick={() => handleExportRouteVideo(selectedRoute)}
-                    disabled={isExportingVideo}
+                    onClick={() => selectedRoute && openVideoExportModal(selectedRoute)}
                     className="px-2 py-1 rounded text-[10px] font-bold bg-[#D5EA83] text-[#273626] hover:bg-[#c6de6a] flex items-center gap-1 transition cursor-pointer ml-1"
-                    title="Export video MP4"
+                    title="Export video with settings"
                   >
                     <Download className="w-3 h-3" />
-                    <span>MP4</span>
+                    <span>Video</span>
                   </button>
                   <button
                     type="button"
@@ -4672,6 +4928,54 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Customer Requested Time Slot - Highly Visible for Drivers at a Glance */}
+                      {stop.timeWindow ? (
+                        <div className="mt-1.5 p-2.5 rounded-xl bg-gradient-to-r from-[#EEF2FF] to-[#E0E7FF] border-2 border-[#6366F1] shadow-2xs flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-7 h-7 rounded-lg bg-[#4338CA] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                              <Clock className="w-4 h-4 stroke-[2.5]" />
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-[10px] font-black uppercase tracking-wider text-[#4338CA]">
+                                Customer Booked Slot
+                              </span>
+                              <span className="text-sm font-black text-[#1E1B4B] tracking-tight">
+                                {stop.timeWindow.label || `${stop.timeWindow.startTime} – ${stop.timeWindow.endTime}`}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end shrink-0">
+                            <span className="text-[10px] font-bold text-[#475569]">Calculated Arrival</span>
+                            <span
+                              className={`text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs flex items-center gap-1 ${
+                                stop.windowStatus === 'late'
+                                  ? 'bg-[#FEF2F2] text-[#991B1B] border-[#FCA5A5]'
+                                  : stop.windowStatus === 'on-time'
+                                  ? 'bg-[#ECFDF5] text-[#065F46] border-[#6EE7B7]'
+                                  : 'bg-[#F0FDF4] text-[#166534] border-[#86EFAC]'
+                              }`}
+                            >
+                              ETA {stop.estimatedArrival || '09:00'}
+                              <span>
+                                {stop.windowStatus === 'late'
+                                  ? '⚠️ Late'
+                                  : stop.windowStatus === 'on-time'
+                                  ? '✓ On-Time'
+                                  : 'Early'}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-1 px-2.5 py-1.5 rounded-lg bg-[#F8FAF6] border border-[#E2E8F0] flex items-center justify-between text-xs text-[#64748B]">
+                          <span className="flex items-center gap-1 font-semibold text-[#475569]">
+                            <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+                            Standard Day Window (No specific slot booked)
+                          </span>
+                          <span className="font-bold text-[#1E453B]">ETA {stop.estimatedArrival || '09:00'}</span>
+                        </div>
+                      )}
+
                       {/* Inline Address Editor inside Summary Modal */}
                       {inlineEditingStopId === stop.id && (
                         <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 flex flex-col gap-1.5 animate-in fade-in duration-150">
@@ -4716,13 +5020,12 @@ export default function App() {
               {currentSummaryRoute.stops.filter((s) => s.latitude !== null).length > 1 && (
                 <button
                   type="button"
-                  onClick={() => handleExportRouteVideo(currentSummaryRoute)}
-                  disabled={isExportingVideo}
-                  className="flex-1 py-3 rounded-xl bg-[#FAFBF7] border border-[#DDE3D7] hover:bg-white text-[#1E453B] font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer disabled:opacity-50"
-                  title="Export MP4 of the driving route animation"
+                  onClick={() => currentSummaryRoute && openVideoExportModal(currentSummaryRoute)}
+                  className="flex-1 py-3 rounded-xl bg-[#FAFBF7] border border-[#DDE3D7] hover:bg-white text-[#1E453B] font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer"
+                  title="Export animated video of the driving route with settings"
                 >
                   <Video className="w-4 h-4 text-[#1E453B]" />
-                  <span>Export Video MP4</span>
+                  <span>Export Video</span>
                 </button>
               )}
               <button
@@ -4834,61 +5137,15 @@ export default function App() {
         </div>
       )}
 
-      {/* VIDEO ANIMATION EXPORT MODAL */}
-      {isExportingVideo && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#18382F] text-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center gap-4 border border-[#D5EA83]/20 animate-in zoom-in-95 duration-200">
-            <div className="relative w-16 h-16 rounded-2xl bg-[#1E453B] border-2 border-[#D5EA83] flex items-center justify-center shadow-lg">
-              <span className="text-3xl animate-bounce">🚐</span>
-              <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#10B981] animate-ping" />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-bold tracking-widest text-[#D5EA83] uppercase">
-                EXPORTING ANIMATION
-              </span>
-              <h3 className="text-lg font-bold">
-                Rendering Route MP4
-              </h3>
-              <p className="text-xs text-[#A4B5AC] leading-relaxed max-w-xs">
-                {videoExportStage || 'Capturing map frames and generating route driving video...'}
-              </p>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="w-full flex flex-col gap-1.5">
-              <div className="w-full bg-white/10 h-3 rounded-full overflow-hidden p-0.5 border border-white/10">
-                <div
-                  className="bg-gradient-to-r from-[#D5EA83] to-[#10B981] h-full rounded-full transition-all duration-300"
-                  style={{ width: `${Math.max(5, videoExportProgress)}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-[#D5EA83] font-bold px-1">
-                <span>Rendering video</span>
-                <span>{videoExportProgress}%</span>
-              </div>
-            </div>
-
-            {videoExportError && (
-              <div className="w-full bg-red-950/80 border border-red-500/50 text-red-200 text-xs p-2.5 rounded-xl">
-                {videoExportError}
-              </div>
-            )}
-
-            <p className="text-[10px] text-white/60">
-              ⚡ High-definition 720p 30fps animation video download will start automatically once encoding finishes.
-            </p>
-
-            <button
-              type="button"
-              onClick={() => setIsExportingVideo(false)}
-              className="py-2 px-5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-white/80 transition cursor-pointer"
-            >
-              Cancel Export
-            </button>
-          </div>
-        </div>
-      )}
+      {/* VIDEO ANIMATION EXPORT SETTINGS MODAL */}
+      <VideoExportModal
+        isOpen={isVideoModalOpen}
+        onClose={() => setIsVideoModalOpen(false)}
+        route={videoExportTargetRoute}
+        markerColor={preferences.markerColor}
+        lineColor={preferences.lineColor}
+        onSuccessToast={showToast}
+      />
 
       {/* DELETE ROUTE CONFIRMATION MODAL */}
       {routeToDelete && (
@@ -4960,9 +5217,45 @@ export default function App() {
         </div>
       )}
 
+      {/* Floating Active Background Download Banner */}
+      {downloadJob && downloadJob.status === 'downloading' && (
+        <div
+          onClick={() => {
+            setScreen('offline-maps');
+            setMainTab('offline-maps');
+          }}
+          className={`fixed ${
+            isMainTab
+              ? 'bottom-[calc(68px+max(env(safe-area-inset-bottom,0px),12px))]'
+              : 'bottom-[max(env(safe-area-inset-bottom,0px),16px)]'
+          } left-4 right-4 max-w-lg mx-auto z-45 bg-[#1E453B]/95 backdrop-blur-md text-white p-3 rounded-2xl shadow-xl border border-[#D5EA83]/50 flex items-center justify-between gap-3 cursor-pointer hover:bg-[#152F29] transition-all`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-[#D5EA83] text-[#1E453B] flex items-center justify-center shrink-0 shadow-xs">
+              <Download className="w-4 h-4 animate-bounce" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-black text-[#D5EA83]">Downloading Map Territory</span>
+                <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/20 text-white">
+                  {downloadJob.percent}%
+                </span>
+              </div>
+              <span className="text-[11px] text-[#C1D7CA] block truncate">
+                {downloadJob.packName} · {downloadJob.downloaded} of {downloadJob.total} tiles saved
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 text-[11px] font-black text-[#1E453B] bg-[#D5EA83] px-2.5 py-1 rounded-lg shrink-0 shadow-2xs">
+            <span>View</span>
+            <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
+          </div>
+        </div>
+      )}
+
       {/* BOTTOM TAB BAR */}
       {isMainTab && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#DDE3D7] flex items-center justify-around py-2.5 px-4 z-40 max-w-xl mx-auto shadow-md">
+        <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-[#DDE3D7] flex items-center justify-around pt-2.5 pb-[max(env(safe-area-inset-bottom,0px),12px)] px-[max(env(safe-area-inset-left,0px),16px)] pr-[max(env(safe-area-inset-right,0px),16px)] z-40 max-w-xl mx-auto shadow-lg">
           <button
             type="button"
             onClick={() => {

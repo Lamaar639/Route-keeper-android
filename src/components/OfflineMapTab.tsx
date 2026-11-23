@@ -23,6 +23,10 @@ import {
 import {
   computeBoundingBoxTiles,
   downloadTerritoryOfflinePack,
+  startBackgroundTerritoryDownload,
+  cancelBackgroundDownload,
+  subscribeToDownloadJob,
+  getActiveDownloadJob,
   getOfflineStorageStats,
   deleteOfflinePackRecord,
   clearAllOfflineTiles,
@@ -30,6 +34,7 @@ import {
   type OfflineMapPack,
   type DownloadProgress,
   type BoundingBox,
+  type ActiveDownloadJob,
 } from '../services/offlineTileManager';
 import type { Coordinate, DeliveryStop } from '../types/route';
 
@@ -104,6 +109,33 @@ export const OfflineMapTab: React.FC<OfflineMapTabProps> = ({
 
   useEffect(() => {
     loadStats();
+    const unsubscribe = subscribeToDownloadJob((job) => {
+      if (!job) {
+        setIsDownloading(false);
+        return;
+      }
+      setIsDownloading(job.status === 'downloading');
+      setProgress({
+        downloaded: job.downloaded,
+        total: job.total,
+        failed: job.failed,
+        percent: job.percent,
+        sizeBytes: job.sizeBytes,
+        currentZoom: job.currentZoom,
+        currentTile: job.currentTile,
+      });
+      if (job.status === 'completed') {
+        setDownloadSuccess(
+          `✓ Successfully downloaded ${job.downloaded.toLocaleString()} tiles (${(job.sizeBytes / (1024 * 1024)).toFixed(1)} MB) covering Zoom 5 through 17! Ready for zero-signal offline routing.`
+        );
+        loadStats();
+      } else if (job.status === 'error') {
+        setDownloadError(job.errorMessage || 'Download failed');
+      } else if (job.status === 'cancelled') {
+        setDownloadError('Download cancelled.');
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   // Calculate center of current bounding box
@@ -409,29 +441,19 @@ export const OfflineMapTab: React.FC<OfflineMapTabProps> = ({
 
   // Start Batch Download (Automatically Zoom 5 to 17)
   const handleStartDownload = async () => {
-    setIsDownloading(true);
     setDownloadSuccess(null);
     setDownloadError(null);
-    setProgress(null);
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
 
     try {
       const finalName = packCustomName.trim() || `Selected Area (Zoom 5-17)`;
-      const pack = await downloadTerritoryOfflinePack({
+      await startBackgroundTerritoryDownload({
         name: finalName,
         bbox,
         zoomMin: 5,
         zoomMax: 17,
         mapService: selectedService,
-        signal: abortController.signal,
-        onProgress: (p) => setProgress(p),
       });
 
-      setDownloadSuccess(
-        `✓ Successfully downloaded ${pack.tileCount.toLocaleString()} tiles (${(pack.sizeBytes / (1024 * 1024)).toFixed(1)} MB) covering Zoom 5 through 17! Ready for zero-signal offline routing.`
-      );
       await loadStats();
       window.dispatchEvent(new Event('storage'));
     } catch (err: any) {
@@ -440,16 +462,11 @@ export const OfflineMapTab: React.FC<OfflineMapTabProps> = ({
       } else {
         setDownloadError(`Download failed: ${err.message || 'Unknown network error'}`);
       }
-    } finally {
-      setIsDownloading(false);
-      abortControllerRef.current = null;
     }
   };
 
   const handleCancelDownload = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    cancelBackgroundDownload();
   };
 
   const handleDeletePack = (packId: string) => {

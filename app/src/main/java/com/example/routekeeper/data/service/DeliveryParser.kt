@@ -63,35 +63,135 @@ object DeliveryParser {
             return DeliveryTimeWindow("17:00", "21:00", 4, "17:00 – 21:00 (4h)")
         }
 
-        val rangeRegex = Regex("""(?:(?:slot|window|time|delivery|between|deliver\s*between|eta|expected|target|period|booked)\s*[:#-]?\s*)?(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm)?)\s*(?:[-–—~]|to|and|until)\s*(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm)?)""", RegexOption.IGNORE_CASE)
+        val rangeRegex = Regex(
+            """((?:slot|window|time|delivery|between|deliver\s*between|eta|expected|target|period|booked)\s*[:#-]?\s*)?(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm)?)\s*(?:[-–—~]|to|and|until)\s*(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm)?)""",
+            RegexOption.IGNORE_CASE
+        )
         val match = rangeRegex.find(clean)
         if (match != null) {
-            val startRaw = match.groupValues[1].trim()
-            val endRaw = match.groupValues[2].trim()
-            val startTime = normalizeTime(startRaw)
-            val endTime = normalizeTime(endRaw)
-            return DeliveryTimeWindow(startTime, endTime, 1, "$startTime – $endTime")
+            val hasKeyword = match.groupValues[1].isNotBlank()
+            val startRaw = match.groupValues[2].trim()
+            val endRaw = match.groupValues[3].trim()
+            val hasTimeMarker = hasKeyword ||
+                listOf(startRaw, endRaw).any {
+                    it.contains(":") || it.contains(".") ||
+                        it.contains("am", ignoreCase = true) ||
+                        it.contains("pm", ignoreCase = true)
+                }
+            if (hasTimeMarker) {
+                val startTime = normalizeClockOrNull(startRaw)
+                val endTime = normalizeClockOrNull(endRaw)
+                if (startTime != null && endTime != null) {
+                    return DeliveryTimeWindow(startTime, endTime, 1, "$startTime – $endTime")
+                }
+            }
         }
         return null
     }
 
-    private fun normalizeTime(raw: String): String {
+    private val EXPLICIT_DEPARTURE_TIME = Regex(
+        """(?:depot\s+departure|departure\s+time|departure|route\s+start(?:\s+time)?|start\s+time|shift\s+start|dispatch\s+time|leave\s+time|leave\s+depot|etd)\s*[:#=-]?\s*(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm))""",
+        RegexOption.IGNORE_CASE
+    )
+    private val ROUTE_SUMMARY_WINDOW = Regex(
+        """^(?:total\s+packages|route\s+summary|shift|manifest|dispatch).*?(?:delivery\s*window|route\s*window|shift\s*window)\s*[:#-]?\s*(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{4}|\d{1,2}\s*(?:am|pm))""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Auto-extracts a route-level departure/start time (24h "HH:mm") if present in the manifest/PDF.
+     * Returns null if no departure time is found so the UI prompts the driver to choose an exact time.
+     */
+    fun extractDepartureTime(text: String): String? {
+        if (text.isBlank()) return null
+        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+        // 1. Prioritize explicit departure / start / dispatch time labels
+        for (line in lines) {
+            EXPLICIT_DEPARTURE_TIME.find(line)?.let { match ->
+                val raw = match.groupValues[1].trim()
+                normalizeClockOrNull(raw)?.let { return it }
+            }
+        }
+
+        // 2. Fallback to route-level summary window line (e.g. "Total Packages: 6 | Delivery Window: 08:00 - 18:00")
+        for (line in lines) {
+            ROUTE_SUMMARY_WINDOW.find(line)?.let { match ->
+                val raw = match.groupValues[1].trim()
+                normalizeClockOrNull(raw)?.let { return it }
+            }
+        }
+
+        return null
+    }
+
+    private fun normalizeClockOrNull(raw: String): String? {
         var clean = raw.trim().lowercase()
         val isPm = clean.contains("pm")
+        val isAm = clean.contains("am")
         clean = clean.replace("am", "").replace("pm", "").trim()
-        val parts = clean.split(":", ".")
-        var hour = parts[0].toIntOrNull() ?: 9
-        val min = if (parts.size > 1) parts[1].toIntOrNull() ?: 0 else 0
-        if (isPm && hour < 12) hour += 12
+
+        var hour: Int
+        val min: Int
+        if (!clean.contains(":") && !clean.contains(".") && clean.length == 4 && clean.all { it.isDigit() }) {
+            hour = clean.substring(0, 2).toIntOrNull() ?: return null
+            min = clean.substring(2, 4).toIntOrNull() ?: return null
+        } else {
+            val parts = clean.split(":", ".")
+            hour = parts[0].toIntOrNull() ?: return null
+            min = if (parts.size > 1) parts[1].toIntOrNull() ?: return null else 0
+        }
+
+        if (min !in 0..59) return null
+        if (isPm && hour in 1..11) hour += 12
+        if (isAm && hour == 12) hour = 0
+        if (hour !in 0..23) return null
         return "%02d:%02d".format(hour, min)
     }
 
+    private val NEW_STOP_LINE = Regex(
+        """^\s*(?:(?:customer\s*name|recipient|client|deliver\s*to|name)\s*:|(?:stop|drop|delivery|job)\s*#?\s*\d+(?:\s*[:.\-–]|\s+[a-zA-Z]))""",
+        RegexOption.IGNORE_CASE
+    )
+    private val HEADER_FOOTER_LINE = Regex(
+        """^(?:route\s*manifest|total\s*packages|page\s+\d+(?:\s+of\s+\d+)?|printed\s+on|generated\s+on|date\s*:)\b.*""",
+        RegexOption.IGNORE_CASE
+    )
+
     fun parseDeliveryList(text: String): List<DeliveryStop> {
         val stops = mutableListOf<DeliveryStop>()
-        val blocks = text.split(Regex("""\n\s*[-=]{3,}\s*\n|\n{2,}"""))
+        val rawBlocks = text.split(Regex("""\n\s*[-=]{3,}\s*\n|\n{2,}"""))
 
         var sequence = 1
-        for (block in blocks) {
+
+        fun commitStop(
+            name: String,
+            phone: String,
+            address: String,
+            orderId: String?,
+            dropNum: String?,
+            timeWindow: DeliveryTimeWindow?
+        ) {
+            if (address.isNotBlank() || name.isNotBlank()) {
+                stops.add(
+                    DeliveryStop(
+                        id = UUID.randomUUID().toString(),
+                        name = name.ifBlank { "Customer #$sequence" },
+                        phone = phone,
+                        address = address.ifBlank { "Central Delivery Stop #$sequence" },
+                        orderId = orderId ?: "ORD-${9920 + sequence}",
+                        sourceSequence = sequence,
+                        dropNumber = dropNum ?: sequence.toString(),
+                        geocodeStatus = GeocodeStatus.PENDING,
+                        delivered = false,
+                        timeWindow = timeWindow
+                    )
+                )
+                sequence++
+            }
+        }
+
+        for (block in rawBlocks) {
             val lines = block.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (lines.isEmpty()) continue
 
@@ -103,8 +203,19 @@ object DeliveryParser {
             var timeWindow: DeliveryTimeWindow? = null
 
             for (line in lines) {
-                if (line.startsWith("ROUTE MANIFEST", ignoreCase = true) || line.startsWith("Total Packages", ignoreCase = true)) {
+                if (HEADER_FOOTER_LINE.matches(line)) {
                     continue
+                }
+
+                // If PDF extraction collapsed blank lines between stops, split when a new record starts
+                if (NEW_STOP_LINE.containsMatchIn(line) && (address.isNotBlank() || (name.isNotBlank() && (phone.isNotBlank() || orderId != null)))) {
+                    commitStop(name, phone, address, orderId, dropNum, timeWindow)
+                    name = ""
+                    phone = ""
+                    address = ""
+                    orderId = null
+                    dropNum = null
+                    timeWindow = null
                 }
 
                 DROP_NUMBER_REGEX.find(line)?.let { match ->
@@ -127,34 +238,30 @@ object DeliveryParser {
                     timeWindow = parseTimeSlot(line)
                 }
 
-                if (line.contains("Customer Name:", ignoreCase = true) || line.contains("Recipient:", ignoreCase = true)) {
+                if (
+                    line.contains("Customer Name:", ignoreCase = true) ||
+                    line.contains("Recipient:", ignoreCase = true) ||
+                    line.contains("Client:", ignoreCase = true) ||
+                    line.contains("Deliver To:", ignoreCase = true) ||
+                    line.startsWith("Name:", ignoreCase = true)
+                ) {
                     name = cleanName(line.substringAfter(":"))
-                } else if (line.contains("Address:", ignoreCase = true)) {
+                } else if (
+                    line.contains("Delivery Address:", ignoreCase = true) ||
+                    line.contains("Address:", ignoreCase = true)
+                ) {
                     address = cleanAddress(line.substringAfter(":"))
                 } else if (name.isBlank() && !line.contains(":") && !UK_POSTCODE.containsMatchIn(line) && !ROAD_KEYWORDS.containsMatchIn(line)) {
                     name = cleanName(line)
                 } else if (address.isBlank() && (UK_POSTCODE.containsMatchIn(line) || ROAD_KEYWORDS.containsMatchIn(line))) {
                     address = cleanAddress(line)
+                } else if (address.isNotBlank() && UK_POSTCODE.containsMatchIn(line) && !UK_POSTCODE.containsMatchIn(address)) {
+                    val extra = cleanAddress(line)
+                    if (extra.isNotBlank()) address = "$address, $extra"
                 }
             }
 
-            if (address.isNotBlank() || name.isNotBlank()) {
-                stops.add(
-                    DeliveryStop(
-                        id = UUID.randomUUID().toString(),
-                        name = name.ifBlank { "Customer #$sequence" },
-                        phone = phone.ifBlank { "+44 20 7946 0000" },
-                        address = address.ifBlank { "Central Delivery Stop #$sequence" },
-                        orderId = orderId ?: "ORD-${9920 + sequence}",
-                        sourceSequence = sequence,
-                        dropNumber = dropNum ?: sequence.toString(),
-                        geocodeStatus = GeocodeStatus.PENDING,
-                        delivered = false,
-                        timeWindow = timeWindow
-                    )
-                )
-                sequence++
-            }
+            commitStop(name, phone, address, orderId, dropNum, timeWindow)
         }
         return stops
     }

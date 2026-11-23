@@ -1,5 +1,8 @@
 package com.example.routekeeper.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,36 +20,35 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.routekeeper.data.service.DeliveryParser
-import com.example.routekeeper.ui.theme.CleanSurface
-import com.example.routekeeper.ui.theme.MintAccent
-import com.example.routekeeper.ui.theme.MintAccentContainer
-import com.example.routekeeper.ui.theme.PinePrimary
-import com.example.routekeeper.ui.theme.TextMuted
-import com.example.routekeeper.ui.theme.TextPrimary
+import com.example.routekeeper.ui.theme.RouteTheme
 import com.example.routekeeper.ui.viewmodel.RouteViewModel
 
 @Composable
@@ -54,7 +56,20 @@ fun ImportScreen(
     viewModel: RouteViewModel,
     onNavigateToPreRouteReview: () -> Unit
 ) {
-    var manifestText by remember { mutableStateOf(DeliveryParser.SAMPLE_DELIVERY_NOTE_TEXT) }
+    val manifestText by viewModel.manifestInputText.collectAsState()
+    val isImportingPdf by viewModel.isImportingPdf.collectAsState()
+    val pdfImportMessage by viewModel.pdfImportMessage.collectAsState()
+    val pdfImportError by viewModel.pdfImportError.collectAsState()
+    val colors = RouteTheme.colors
+
+    val pdfPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importSharedPdfUri(uri)
+        }
+    }
+
     val parsedStops = remember(manifestText) {
         if (manifestText.isNotBlank()) DeliveryParser.parseDeliveryList(manifestText) else emptyList()
     }
@@ -63,7 +78,7 @@ fun ImportScreen(
         modifier = Modifier
             .fillMaxSize()
             .testTag("import_screen_scroll"),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
@@ -71,39 +86,172 @@ fun ImportScreen(
                 text = "Import Delivery Manifest",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = PinePrimary
+                color = colors.brandPrimary
             )
             Text(
-                text = "Paste customer addresses, names, contact numbers, and delivery time slots.",
+                text = "Share any PDF directly to RouteKeeper from another app, open a PDF, or paste delivery text below.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextMuted
+                color = colors.textMuted
             )
         }
 
-        // Quick load sample button
+        // Direct PDF Share Tip Card
         item {
-            Row(
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.accentContainer),
+                border = BorderStroke(1.dp, colors.brandPrimary.copy(alpha = 0.25f))
             ) {
-                Button(
-                    onClick = { manifestText = DeliveryParser.SAMPLE_DELIVERY_NOTE_TEXT },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("load_sample_manifest_button"),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = PinePrimary)
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(imageVector = Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Load Sample Manifest", fontSize = 13.sp)
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        tint = colors.onAccentContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Direct PDF Share Ready: Viewing a delivery PDF in Gmail, WhatsApp, Files, or Drive? Tap Share → RouteKeeper to auto-import stops without downloading.",
+                        fontSize = 12.sp,
+                        color = colors.onAccentContainer,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 16.sp
+                    )
                 }
+            }
+        }
 
-                OutlinedButton(
-                    onClick = { manifestText = "" },
-                    shape = RoundedCornerShape(10.dp)
+        // PDF Import Progress / Status / Error
+        if (isImportingPdf) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.heroCardBg)
                 ) {
-                    Text(text = "Clear", fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            color = colors.accent,
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = pdfImportMessage ?: "Extracting stops from PDF...",
+                            color = colors.onHeroPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        } else if (pdfImportError != null) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.dangerBg),
+                    border = BorderStroke(1.dp, colors.dangerBorder)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.Warning, contentDescription = "PDF Error", tint = colors.dangerAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = pdfImportError ?: "Failed to import PDF",
+                            color = colors.dangerText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        } else if (pdfImportMessage != null) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.deliveredBg),
+                    border = BorderStroke(1.dp, colors.deliveredAccent)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "PDF Imported", tint = colors.deliveredAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = pdfImportMessage ?: "",
+                            color = colors.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Quick action buttons: Pick PDF, Sample Manifest, Clear
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("pick_pdf_manifest_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colors.brandPrimary,
+                            contentColor = colors.onBrandPrimary
+                        )
+                    ) {
+                        Icon(imageVector = Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "Import PDF", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.clearPdfImportStatus()
+                            viewModel.setManifestInputText(DeliveryParser.SAMPLE_DELIVERY_NOTE_TEXT)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("load_sample_manifest_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, colors.brandPrimary)
+                    ) {
+                        Icon(imageVector = Icons.Default.Description, contentDescription = null, tint = colors.brandPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "Sample", fontSize = 13.sp, color = colors.brandPrimary, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.clearPdfImportStatus()
+                            viewModel.setManifestInputText("")
+                        },
+                        modifier = Modifier.height(48.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, colors.borderSubtle)
+                    ) {
+                        Text(text = "Clear", fontSize = 13.sp, color = colors.textPrimary)
+                    }
                 }
             }
         }
@@ -113,24 +261,30 @@ fun ImportScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = CleanSurface)
+                colors = CardDefaults.cardColors(containerColor = colors.cardSurface),
+                border = BorderStroke(1.dp, colors.borderSubtle)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
                         text = "MANIFEST TEXT / NOTES",
                         style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
+                        color = colors.textMuted,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = manifestText,
-                        onValueChange = { manifestText = it },
+                        onValueChange = { viewModel.setManifestInputText(it) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp)
                             .testTag("manifest_input_field"),
-                        placeholder = { Text("Paste order notes, manifest lines, addresses...") },
+                        placeholder = {
+                            Text(
+                                "Share a PDF to RouteKeeper or paste order notes, addresses...",
+                                color = colors.textMuted
+                            )
+                        },
                         maxLines = 15,
                         shape = RoundedCornerShape(10.dp)
                     )
@@ -143,7 +297,8 @@ fun ImportScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = CleanSurface)
+                colors = CardDefaults.cardColors(containerColor = colors.cardSurface),
+                border = BorderStroke(1.dp, colors.borderSubtle)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -154,18 +309,18 @@ fun ImportScreen(
                         Text(
                             text = "EXTRACTED DELIVERY STOPS",
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
+                            color = colors.textMuted,
                             fontWeight = FontWeight.Bold
                         )
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(MintAccentContainer)
+                                .background(colors.accentContainer)
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
                                 text = "${parsedStops.size} Stops Detected",
-                                color = PinePrimary,
+                                color = colors.onAccentContainer,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
                             )
@@ -184,12 +339,12 @@ fun ImportScreen(
                                 modifier = Modifier
                                     .size(24.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(PinePrimary),
+                                    .background(colors.brandPrimary),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "${index + 1}",
-                                    color = MintAccent,
+                                    color = colors.onBrandPrimary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -201,13 +356,13 @@ fun ImportScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
+                                    color = colors.textPrimary
                                 )
                                 Text(
                                     text = stop.address,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontSize = 12.sp,
-                                    color = TextMuted,
+                                    color = colors.textMuted,
                                     maxLines = 1
                                 )
                             }
@@ -215,14 +370,14 @@ fun ImportScreen(
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
-                                        .background(CleanSurface)
+                                        .background(colors.slotCardBg)
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
                                         text = win.startTime,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = PinePrimary
+                                        color = colors.slotCardAccent
                                     )
                                 }
                             }
@@ -234,7 +389,7 @@ fun ImportScreen(
                         Text(
                             text = "+ ${parsedStops.size - 4} more stops",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted,
+                            color = colors.textMuted,
                             fontSize = 12.sp
                         )
                     }
@@ -258,8 +413,8 @@ fun ImportScreen(
                 enabled = parsedStops.isNotEmpty(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = PinePrimary,
-                    contentColor = CleanSurface
+                    containerColor = colors.brandPrimary,
+                    contentColor = colors.onBrandPrimary
                 )
             ) {
                 Row(

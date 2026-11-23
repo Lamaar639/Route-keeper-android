@@ -45,6 +45,94 @@ export interface TileTarget {
   url: string;
 }
 
+const ACTIVE_JOB_STORAGE_KEY = 'routekeeper:active-download-job:v1';
+
+export interface ActiveDownloadJob {
+  id: string;
+  packName: string;
+  bbox: BoundingBox;
+  zoomMin: number;
+  zoomMax: number;
+  mapService: 'osm' | 'topo' | 'satellite';
+  status: 'idle' | 'downloading' | 'completed' | 'cancelled' | 'error';
+  downloaded: number;
+  total: number;
+  failed: number;
+  percent: number;
+  sizeBytes: number;
+  currentZoom?: number;
+  currentTile?: string;
+  errorMessage?: string;
+  completedAt?: string;
+}
+
+let currentDownloadJob: ActiveDownloadJob | null = (() => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+})();
+
+let activeAbortController: AbortController | null = null;
+const jobListeners = new Set<(job: ActiveDownloadJob | null) => void>();
+
+function notifyJobListeners(job: ActiveDownloadJob | null) {
+  currentDownloadJob = job;
+  if (typeof window !== 'undefined') {
+    try {
+      if (job) {
+        localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, JSON.stringify(job));
+      } else {
+        localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+      }
+    } catch {
+      // ignore
+    }
+    window.dispatchEvent(new CustomEvent('routekeeper:download-job-change', { detail: job }));
+  }
+  jobListeners.forEach((fn) => {
+    try {
+      fn(job);
+    } catch {
+      // ignore
+    }
+  });
+}
+
+export function getActiveDownloadJob(): ActiveDownloadJob | null {
+  return currentDownloadJob;
+}
+
+export function subscribeToDownloadJob(listener: (job: ActiveDownloadJob | null) => void): () => void {
+  jobListeners.add(listener);
+  listener(currentDownloadJob);
+  return () => {
+    jobListeners.delete(listener);
+  };
+}
+
+export function cancelBackgroundDownload(): void {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
+  if (currentDownloadJob && currentDownloadJob.status === 'downloading') {
+    notifyJobListeners({
+      ...currentDownloadJob,
+      status: 'cancelled',
+      errorMessage: 'Download cancelled by user.',
+    });
+  }
+}
+
+export function clearActiveDownloadJob(): void {
+  cancelBackgroundDownload();
+  notifyJobListeners(null);
+}
+
 // Open IndexedDB database for resilient tile blob storage with coordKey index
 function openTileDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -522,6 +610,118 @@ export async function downloadTerritoryOfflinePack(options: {
 
   saveOfflinePackRecord(pack);
   return pack;
+}
+
+/**
+ * Start or resume a background offline map pack download that persists across screen navigation
+ */
+export async function startBackgroundTerritoryDownload(options: {
+  name: string;
+  bbox?: BoundingBox;
+  center?: Coordinate;
+  radiusKm?: number;
+  zoomMin?: number;
+  zoomMax?: number;
+  mapService?: 'osm' | 'topo' | 'satellite';
+}): Promise<OfflineMapPack> {
+  const {
+    name,
+    bbox: customBbox,
+    center,
+    radiusKm = 10,
+    zoomMin = 5,
+    zoomMax = 17,
+    mapService = 'osm',
+  } = options;
+
+  const bbox: BoundingBox = customBbox || (center ? getBoundingBox(center.latitude, center.longitude, radiusKm) : {
+    minLat: 51.40,
+    maxLat: 51.60,
+    minLon: -0.30,
+    maxLon: 0.10,
+  });
+
+  const effectiveZoomMax = mapService === 'topo' ? Math.min(17, zoomMax) : zoomMax;
+  const tiles = computeBoundingBoxTiles(bbox, zoomMin, effectiveZoomMax, mapService);
+
+  // Abort any existing active download before starting new
+  if (activeAbortController) {
+    activeAbortController.abort();
+  }
+
+  const abortController = new AbortController();
+  activeAbortController = abortController;
+
+  const initialJob: ActiveDownloadJob = {
+    id: `job-${Date.now()}`,
+    packName: name,
+    bbox,
+    zoomMin,
+    zoomMax: effectiveZoomMax,
+    mapService,
+    status: 'downloading',
+    downloaded: 0,
+    total: tiles.length,
+    failed: 0,
+    percent: 0,
+    sizeBytes: 0,
+  };
+  notifyJobListeners(initialJob);
+
+  try {
+    const pack = await downloadTerritoryOfflinePack({
+      name,
+      bbox,
+      center,
+      radiusKm,
+      zoomMin,
+      zoomMax: effectiveZoomMax,
+      mapService,
+      signal: abortController.signal,
+      onProgress: (p) => {
+        notifyJobListeners({
+          ...initialJob,
+          status: 'downloading',
+          downloaded: p.downloaded,
+          total: p.total,
+          failed: p.failed,
+          percent: p.percent,
+          sizeBytes: p.sizeBytes,
+          currentZoom: p.currentZoom,
+          currentTile: p.currentTile,
+        });
+      },
+    });
+
+    notifyJobListeners({
+      ...initialJob,
+      status: 'completed',
+      downloaded: pack.tileCount,
+      percent: 100,
+      sizeBytes: pack.sizeBytes,
+      completedAt: pack.downloadedAt,
+      errorMessage: undefined,
+    });
+
+    activeAbortController = null;
+    return pack;
+  } catch (err: any) {
+    if (abortController.signal.aborted) {
+      notifyJobListeners({
+        ...initialJob,
+        status: 'cancelled',
+        errorMessage: 'Download cancelled.',
+      });
+    } else {
+      notifyJobListeners({
+        ...initialJob,
+        status: 'error',
+        errorMessage: err.message || 'Download failed. Please check network connection.',
+      });
+    }
+    activeAbortController = null;
+    throw err;
+  }
 }
 
 /**
