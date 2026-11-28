@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+*.jks
+*.keystore
+*.p12
+.gradle/
+app/build/
